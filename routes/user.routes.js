@@ -12,11 +12,11 @@ router.post('/send-otp', authController.sendOtp);
 router.post('/verify-otp', authController.verifyOtp);
 router.post('/forgot-password', authController.forgotPassword);
 router.patch('/reset-password/:token', authController.resetPassword);
+router.patch('/update-password', authController.updatePassword);
 
 // Protect all routes after this middleware
 router.use(authController.protect);
 
-router.patch('/update-password', authController.updatePassword);
 router.get('/me', userController.getMe, userController.getUser);
 router.patch(
   '/updateMe',

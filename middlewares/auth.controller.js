@@ -158,26 +158,82 @@ console.log(resetToken);
   }
 });
 
-exports.resetPassword = catchAsync(async (req, res, next) => {
-  const hashedToken = crypto.createHash('sha256').update(req.params.token).digest('hex');
+// exports.resetPassword = catchAsync(async (req, res, next) => {
+//   const hashedToken = crypto.createHash('sha256').update(req.params.token).digest('hex');
 
-  const user = await User.findOne({
+//   const user = await User.findOne({
+//     passwordResetToken: hashedToken,
+//     passwordResetExpires: { $gt: Date.now() }
+//   });
+
+//   if (!user) {
+//     return next(new AppError('Token is invalid or has expired', 400));
+//   }
+// console.log(req.body)
+//   user.password = req.body.newPassword;
+//   user.confirmPassword = req.body.confirmPassword;
+//   user.passwordResetToken = undefined;
+//   user.passwordResetExpires = undefined;
+//   await user.save();
+
+//   createSendToken(user, 200, req, res);
+// });
+
+
+exports.resetPassword = catchAsync(async (req, res, next) => {
+  const { contact, newPassword, confirmPassword } = req.body;
+  const token = req.params.token;
+
+  // Validate required fields
+  if (!contact || !newPassword || !confirmPassword || !token) {
+    return next(new AppError('All fields and token are required', 400));
+  }
+
+  if (newPassword !== confirmPassword) {
+    return next(new AppError('Passwords do not match', 400));
+  }
+
+  const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+  const userByToken = await User.findOne({
     passwordResetToken: hashedToken,
     passwordResetExpires: { $gt: Date.now() }
   });
 
-  if (!user) {
+  if (!userByToken) {
     return next(new AppError('Token is invalid or has expired', 400));
   }
 
-  user.password = req.body.password;
-  user.confirmPassword = req.body.confirmPassword;
-  user.passwordResetToken = undefined;
-  user.passwordResetExpires = undefined;
-  await user.save();
+  // Ensure the contact also matches the user
+  const isEmail = contact.includes('@');
+  const query = isEmail ? { email: contact } : { phone: contact };
 
-  createSendToken(user, 200, req, res);
+  const userByContact = await User.findOne(query).select('+password');
+
+  if (!userByContact || userByContact.id !== userByToken.id) {
+    return next(new AppError('User mismatch or not found with this contact', 404));
+  }
+
+  // Prevent using same password again
+  const isSame = await userByContact.correctPassword(newPassword, userByContact.password);
+  if (isSame) {
+    return next(new AppError('New password cannot be same as old password', 400));
+  }
+
+  // All checks passed, update password
+  userByContact.password = newPassword;
+  userByContact.confirmPassword = confirmPassword;
+  userByContact.passwordResetToken = undefined;
+  userByContact.passwordResetExpires = undefined;
+  await userByContact.save();
+
+  res.status(200).json({
+    status: 'success',
+    message: 'Password updated successfully. Please log in.',
+  });
 });
+
+
 
 exports.updatePassword = catchAsync(async (req, res, next) => {
   const user = await User.findById(req.user.id).select('+password');
@@ -192,6 +248,43 @@ exports.updatePassword = catchAsync(async (req, res, next) => {
 
   createSendToken(user, 200, req, res);
 });
+
+
+// controllers/authController.js or userController.js
+
+// exports.updatePassword = catchAsync(async (req, res, next) => {
+//   const user = await User.findById(req.user.id).select('+password');
+
+//   if (!user) {
+//     return next(new AppError('User not found', 404));
+//   }
+
+//   const { password, confirmPassword } = req.body;
+
+//   // Validate presence
+//   if (!password || !confirmPassword) {
+//     return next(new AppError('Please provide both new and confirm password', 400));
+//   }
+
+//   // Check if passwords match
+//   if (password !== confirmPassword) {
+//     return next(new AppError('Passwords do not match', 400));
+//   }
+
+//   // Prevent reusing old password
+//   const isSame = await user.correctPassword(password, user.password);
+//   if (isSame) {
+//     return next(new AppError('New password must be different from current password', 400));
+//   }
+
+//   // Update and save
+//   user.password = password;
+//   user.confirmPassword = confirmPassword;
+//   await user.save();
+
+//   // Optionally: re-login user with new token
+//   createSendToken(user, 200, req, res);
+// });
 
 exports.sendOtp = catchAsync(async (req, res, next) => {
   const { contact } = req.body;
