@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const { OAuth2Client } = require('google-auth-library');
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const { promisify } = require('util');
 const jwt = require('jsonwebtoken');
 const User = require('../models/user.model');
@@ -17,13 +19,13 @@ const signToken = id => {
 const createSendToken = (user, statusCode, req, res) => {
   const token = signToken(user._id);
 
-  res.cookie('jwt', token, {
-    expires: new Date(
-      Date.now() + process.env.JWT_COOKIE_EXPIRES_IN * 24 * 60 * 60 * 1000
-    ),
-    httpOnly: true,
-    secure: req.secure || req.headers['x-forwarded-proto'] === 'https'
-  });
+const cookieOptions = {
+        expires: new Date(Date.now() + process.env.JWT_COOKIE_EXPIRES_IN * 24 * 60 * 60 * 1000),
+        httpOnly: true,
+        secure: req.secure || req.headers['x-forwarded-proto'] === 'https', // For HTTPS in production
+    };
+
+    res.cookie('jwt', token, cookieOptions);
 
   user.password = undefined;
 
@@ -35,19 +37,63 @@ const createSendToken = (user, statusCode, req, res) => {
   });
 };
 
+
 exports.signup = catchAsync(async (req, res, next) => {
+  // 1) Check if email already exists
+  const existingUserByEmail = await User.findOne({ email: req.body.email });
+  if (existingUserByEmail) {
+    return next(new AppError('This email is already registered. Please use a different email or log in.', 409)); // 409 Conflict
+  }
+
+  // 2) Check if phone number already exists (if provided)
+  if (req.body.phone) {
+    const existingUserByPhone = await User.findOne({ phone: req.body.phone });
+    if (existingUserByPhone) {
+      return next(new AppError('This phone number is already registered. Please use a different phone number or log in.', 409)); // 409 Conflict
+    }
+  }
+
+  // Create new user
   const newUser = await User.create({
     fullName: req.body.fullName,
     email: req.body.email,
     phone: req.body.phone,
     photo: req.file ? req.file.filename : undefined,
-    role: req.body.role ? req.body.role : 'user',
+    role: req.body.role || 'user', // Default to 'user' if not provided
     password: req.body.password,
     confirmPassword: req.body.confirmPassword,
-    terms: req.body.terms ? req.body.terms : false
+    isProfileComplete :true,
+    terms: req.body.terms || false // Default to false if not provided
   });
-  await new Email(newUser, '').sendWelcome();
+
+  // Send welcome email
+  await new Email(newUser, '').sendWelcome(); // Assuming Email class and sendWelcome method
+
+  // Create and send token
   createSendToken(newUser, 201, req, res);
+});
+
+exports.login = catchAsync(async (req, res, next) => {
+  const { email, password } = req.body; // 'email' field can also contain phone number for login
+
+  // 1) Check if email/phone and password are provided
+  if (!email || !password) {
+    return next(new AppError('Please provide your email/phone and password!', 400));
+  }
+
+  const user = await User.findOne({
+    $or: [{ email }, { phone: email }] // Allows login with either email or phone
+  }).select('+password');
+
+  // console.log(user); // Keep for debugging if needed
+
+  // 3) Check if user exists and password is correct
+  if (!user || !(await user.correctPassword(password, user.password))) {
+    return next(new AppError('Incorrect email/phone or password. Please try again.', 401)); // 401 Unauthorized
+  }
+
+  // 4) If everything is ok, send token to client
+  createSendToken(user, 200, req, res);
 });
 
 exports.login = catchAsync(async (req, res, next) => {
@@ -324,4 +370,156 @@ exports.verifyOtp = catchAsync(async (req, res, next) => {
   }
 
   createSendToken(user, 200, req, res);
+});
+
+
+
+
+// --- Google Sign-Up (for the /register route) ---
+exports.googleSignUp = catchAsync(async (req, res, next) => {
+    const { token: idToken } = req.body; // Renamed 'token' to 'idToken' for clarity
+
+    if (!idToken) {
+        return next(new AppError('Google ID token is required.', 400));
+    }
+
+    const ticket = await client.verifyIdToken({
+        idToken: idToken,
+        audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, name, picture } = payload;
+
+    if (!email) {
+        return next(new AppError('Google signup failed. No email found in token.', 400));
+    }
+
+    // 1. Check if user already exists by email or googleId
+    let user = await User.findOne({ $or: [{ email }, { googleId }] });
+
+    if (user) {
+        // If user already exists:
+        // Case A: User exists with this email (traditional signup) but no googleId
+        if (!user.googleId) {
+            // Link the Google account to the existing traditional account
+            user.googleId = googleId;
+            if (!user.fullName) user.fullName = name;
+            if (!user.photo) user.photo = picture;
+            await user.save({ validateBeforeSave: false }); // Skip validation for password/phone if not present
+            // Treat this as a successful sign-in after linking
+            return createSendToken(user, 200, req, res);
+        }
+        // Case B: User already exists with this googleId (or email linked to a different googleId)
+        // This means they are trying to sign up again or email is already linked to another Google account.
+        return next(new AppError('An account with this Google account or email already exists. Please sign in instead.', 409));
+    }
+
+    // 2. If user does NOT exist, create a new user (Google signup)
+    const newUser = await User.create({
+        fullName: name,
+        email,
+        photo: picture,
+        googleId,
+        password: crypto.randomBytes(16).toString('hex'), // Generate a random placeholder password
+        // confirmPassword: crypto.randomBytes(16).toString('hex'), // Not strictly needed if password is not used for login
+        role: 'user',
+        terms: true, // Assuming terms are accepted by using Google signup
+        isProfileComplete: false, // Phone number is missing, so profile is incomplete
+    });
+
+    // Send token. Frontend will check `isProfileComplete`
+    createSendToken(newUser, 201, req, res); // 201 Created for new resource
+});
+
+// --- Google Sign-In (for the /login route) ---
+exports.googleSignIn = catchAsync(async (req, res, next) => {
+    const { token: idToken } = req.body; // Renamed 'token' to 'idToken' for clarity
+
+    if (!idToken) {
+        return next(new AppError('Google ID token is required.', 400));
+    }
+
+    const ticket = await client.verifyIdToken({
+        idToken: idToken,
+        audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, name, picture } = payload;
+
+    if (!email) {
+        return next(new AppError('Google login failed. No email found in token.', 400));
+    }
+
+    // 1. Find user by googleId or email
+    let user = await User.findOne({ $or: [{ googleId }, { email }] });
+
+    if (!user) {
+        // If user not found, they need to register first
+        return next(new AppError('No account found with this Google ID or email. Please register first.', 404));
+    }
+
+    // 2. If user exists:
+    // Case A: User exists by email but doesn't have googleId (traditional user signing in with Google for first time)
+    if (!user.googleId && user.email === email) {
+        user.googleId = googleId;
+        if (!user.fullName) user.fullName = name;
+        if (!user.photo) user.photo = picture;
+        await user.save({ validateBeforeSave: false }); // Skip validation for password/phone if not present
+    }
+    // Case B: User exists with googleId, ensure it matches (standard Google sign-in)
+    else if (user.googleId && user.googleId !== googleId) {
+        // This is an edge case: email exists, but linked to a different googleId or
+        // the same email is trying to sign in with a different Google account.
+        // You might want to prompt for account linking or throw a specific error.
+        return next(new AppError('This email is already associated with a different Google account. Please use the correct Google account or sign in traditionally.', 409));
+    }
+
+    // Send token. Frontend will check `isProfileComplete`
+    createSendToken(user, 200, req, res);
+});
+
+// --- Endpoint to complete profile (e.g., add phone number) ---
+exports.completeProfile = catchAsync(async (req, res, next) => {
+    // This route should be protected by your authentication middleware
+    // req.user will be populated by the middleware from the JWT token
+    const userId = req.user.id; // Assuming your JWT payload has 'id'
+    const { phone } = req.body;
+
+    if (!phone) {
+        return next(new AppError('Phone number is required to complete your profile.', 400));
+    }
+
+    // Validate phone format if needed
+    // if (!isValidPhoneNumber(phone)) { return next(new AppError('Invalid phone number format.', 400)); }
+
+    try {
+        // Check if this phone number is already taken by another user
+        const existingUserWithPhone = await User.findOne({ phone });
+        if (existingUserWithPhone && existingUserWithPhone._id.toString() !== userId) {
+            return next(new AppError('This phone number is already registered to another account.', 409));
+        }
+
+        const user = await User.findById(userId);
+        if (!user) {
+            return next(new AppError('User not found.', 404));
+        }
+
+        user.phone = phone;
+        user.isProfileComplete = true; // Mark profile as complete
+
+        await user.save(); // Mongoose will validate the phone number uniqueness here
+
+        // Re-issue token with updated `isProfileComplete` status
+        createSendToken(user, 200, req, res);
+
+    } catch (error) {
+        // Handle Mongoose unique validation error for phone if it occurs here
+        if (error.code === 11000) { // Duplicate key error
+            return next(new AppError('This phone number is already registered to another account.', 409));
+        }
+        console.error('Error completing profile:', error);
+        return next(new AppError('Failed to update profile. Please try again.', 500));
+    }
 });

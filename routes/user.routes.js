@@ -13,7 +13,9 @@ router.post('/verify-otp', authController.verifyOtp);
 router.post('/forgot-password', authController.forgotPassword);
 router.patch('/reset-password/:token', authController.resetPassword);
 router.patch('/update-password', authController.updatePassword);
-
+router.post('/google/signin', authController.googleSignIn); 
+router.post('/google/signup', authController.googleSignUp); 
+router.post('/complete-profile', authController.completeProfile); 
 // Protect all routes after this middleware
 router.use(authController.protect);
 

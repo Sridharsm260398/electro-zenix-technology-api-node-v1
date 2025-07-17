@@ -35,6 +35,10 @@ app.use(cors());
 // }))
 
 app.options('*', cors());
+// app.use(cors({
+//   origin: 'http://localhost:4200', 
+//   credentials: true               
+// }));
 // app.options('/api/v1/tours/:id', cors());
 
 // Serving static files
@@ -61,15 +65,15 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 // Limit requests from same API
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
-  standardHeaders: true,
-  legacyHeaders: false,
-  validateProxy: false, 
-});
+// const limiter = rateLimit({
+//   windowMs: 15 * 60 * 1000, // 15 minutes
+//   max: 100,
+//   standardHeaders: true,
+//   legacyHeaders: false,
+//   validateProxy: false, 
+// });
 
-app.use('/api', limiter);
+// app.use('/api', limiter);
 
 // Body parser, reading data from body into req.body
 app.use(express.json({ limit: '10kb' }));
@@ -95,7 +99,6 @@ app.use((req, res, next) => {
 
 // 3) ROUTES
 app.use('/api/v1/users', userRouter);
-
 app.all('*', (req, res, next) => {
   next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
 });
