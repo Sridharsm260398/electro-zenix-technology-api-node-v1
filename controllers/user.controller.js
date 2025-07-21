@@ -4,7 +4,7 @@ const User = require('../models/user.model');
 const catchAsync = require('../utils/catch.async');
 const AppError = require('../utils/app.error');
 const factory = require('./handler.factory');
-
+const crypto = require('crypto');
 // const multerStorage = multer.diskStorage({
 //   destination: (req, file, cb) => {
 //     cb(null, 'public/img/users');
@@ -96,12 +96,73 @@ exports.deleteMe = catchAsync(async (req, res, next) => {
   });
 });
 
-exports.createUser = (req, res) => {
-  res.status(500).json({
-    status: 'error',
-    message: 'This route is not defined! Please use /signup instead'
+
+
+exports.createUser = catchAsync(async (req, res, next) => {
+  // 1) Check if email already exists
+  const existingUserByEmail = await User.findOne({ email: req.body.email });
+  if (existingUserByEmail) {
+    return next(
+      new AppError(
+        'This email is already registered. Please use a different email or log in.',
+        409
+      )
+    );
+  }
+
+  // 2) Check if phone already exists (if provided)
+  if (req.body.phone) {
+    const existingUserByPhone = await User.findOne({ phone: req.body.phone });
+    if (existingUserByPhone) {
+      return next(
+        new AppError(
+          'This phone number is already registered. Please use a different phone number or log in.',
+          409
+        )
+      );
+    }
+  }
+
+  // 3) Generate random password if not provided
+  const randomPassword =
+    req.body.password ||
+    crypto.randomBytes(6).toString('hex'); 
+
+  // 4) Create new user
+  const newUser = await User.create({
+    fullName: req.body.fullName,
+    email: req.body.email,
+    phone: req.body.phone , 
+    photo: req.file ? req.file.filename : 'default.jpg',
+    role: req.body.role || 'user',
+    password: randomPassword,
+    googleId:null,
+    confirmPassword: randomPassword,
+    isProfileComplete: true,
+    terms: req.body.terms ?? true,
   });
-};
+
+  // 5) Send welcome email with password (optional)
+  try {
+    await new Email(newUser, '').sendWelcome();
+  } catch (err) {
+    console.log('Welcome email failed, but user created successfully:', err);
+  }
+
+  // 6) Respond to admin
+  res.status(201).json({
+    status: 'success',
+    data: {
+      user: {
+        _id: newUser._id,
+        fullName: newUser.fullName,
+        email: newUser.email,
+        phone: newUser.phone,
+        role: newUser.role,      },
+    },
+  });
+});
+
 
 exports.getUser = factory.getOne(User);
 exports.getAllUsers = factory.getAll(User);

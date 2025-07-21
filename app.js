@@ -14,6 +14,8 @@ const cors = require('cors');
 const AppError = require('./utils/app.error');
 const globalErrorHandler = require('./controllers/error.controller');
 const userRouter = require('./routes/user.routes');
+const invoiceRouter = require('./routes/invoice.routes');
+
 const dotenv = require('dotenv');
 dotenv.config(); // Looks for .env in root
 
@@ -99,6 +101,7 @@ app.use((req, res, next) => {
 
 // 3) ROUTES
 app.use('/api/v1/users', userRouter);
+app.use('/api/v1/invoice', invoiceRouter);
 app.all('*', (req, res, next) => {
   next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
 });

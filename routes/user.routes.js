@@ -17,7 +17,7 @@ router.post('/google/signin', authController.googleSignIn);
 router.post('/google/signup', authController.googleSignUp); 
 router.post('/complete-profile', authController.completeProfile); 
 // Protect all routes after this middleware
-router.use(authController.protect);
+//router.use(authController.protect);
 
 router.get('/me', userController.getMe, userController.getUser);
 router.patch(
@@ -28,7 +28,7 @@ router.patch(
 );
 router.delete('/deleteMe', userController.deleteMe);
 
-router.use(authController.restrictTo('admin'));
+//router.use(authController.restrictTo('admin'));
 
 router
   .route('/')
