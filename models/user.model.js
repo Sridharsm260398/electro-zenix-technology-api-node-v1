@@ -60,10 +60,17 @@ const userSchema = new mongoose.Schema({
     default: 'default.jpg'
   },
   role: {
-    type: String,
-    enum: ['user', 'admin','editor','employe'],
-    default: 'user'
-  },
+  type: [String], 
+  enum: ['admin', 'user', 'editor'],
+  default: ['user'],
+  set: function (value) {
+    
+    if (typeof value === 'string') {
+      return [value];
+    }
+    return value;
+  }
+},
   passwordChangedAt: Date,
   passwordResetToken: String,
   passwordResetExpires: Date,
