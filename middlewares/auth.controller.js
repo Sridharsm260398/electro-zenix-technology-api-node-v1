@@ -30,6 +30,7 @@ const cookieOptions = {
   user.password = undefined;
 
   res.status(statusCode).json({
+    statusCode,
     expiresIn:3600,
     status: 'success',
     token,
@@ -478,6 +479,60 @@ exports.googleSignIn = catchAsync(async (req, res, next) => {
 
     // Send token. Frontend will check `isProfileComplete`
     createSendToken(user, 200, req, res);
+});
+// --- Unified Google Auth (for /google-auth route) ---
+exports.googleAuth = catchAsync(async (req, res, next) => {
+    const { token: idToken } = req.body;
+
+    if (!idToken) {
+        return next(new AppError('Google ID token is required.', 400));
+    }
+
+    const ticket = await client.verifyIdToken({
+        idToken: idToken,
+        audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, name, picture } = payload;
+
+    if (!email) {
+        return next(new AppError('Google authentication failed. No email found in token.', 400));
+    }
+
+    let user = await User.findOne({ $or: [{ googleId }, { email }] });
+
+    if (user) {
+        if (!user.googleId) {
+            user.googleId = googleId;
+            if (!user.fullName) user.fullName = name;
+            if (!user.photo) user.photo = picture;
+            await user.save({ validateBeforeSave: false });
+        }
+        else if (user.googleId !== googleId) {
+            return next(
+                new AppError(
+                    'This email is already associated with a different Google account. Please use the correct account or sign in traditionally.',
+                    409
+                )
+            );
+        }
+
+        return createSendToken(user, 200, req, res);
+    }
+
+    const newUser = await User.create({
+        fullName: name,
+        email,
+        photo: picture,
+        googleId,
+        password: crypto.randomBytes(16).toString('hex'), 
+        role: 'user',
+        terms: true,
+        isProfileComplete: false,
+    });
+
+    return createSendToken(newUser, 201, req, res);
 });
 
 // --- Endpoint to complete profile (e.g., add phone number) ---
