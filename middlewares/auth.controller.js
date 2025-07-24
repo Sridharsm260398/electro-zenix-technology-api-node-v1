@@ -107,7 +107,6 @@ exports.login = catchAsync(async (req, res, next) => {
   const user = await User.findOne({
     $or: [{ email }, { phone: email }]
   }).select('+password');
-console.log(user);
   if (!user || !(await user.correctPassword(password, user.password))) {
     return next(new AppError('Incorrect email/phone or password', 401));
   }
@@ -189,8 +188,7 @@ exports.forgotPassword = catchAsync(async (req, res, next) => {
 
   const resetToken = user.createPasswordResetToken();
   await user.save({ validateBeforeSave: false });
-console.log(user);
-console.log(resetToken);
+
   try {
     const resetURL = `${req.protocol}://${req.get('host')}/api/v1/users/reset-password/${resetToken}`;
     //await new Email(user, resetURL).sendPasswordReset();
@@ -339,8 +337,6 @@ exports.sendOtp = catchAsync(async (req, res, next) => {
 
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   otpStore.set(contact, otp);
-
-  console.log(`🔐 OTP for ${contact}: ${otp}`);
 
   res.status(200).json({
     status: 'success',

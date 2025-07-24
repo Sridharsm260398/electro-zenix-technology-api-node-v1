@@ -11,21 +11,17 @@ const userSchema = new mongoose.Schema({
   email: {
     type: String,
     required: [true, 'Please provide your email'],
-    unique: true, // Email should still be unique for all users
+    unique: true,
     lowercase: true,
     validate: [validator.isEmail, 'Please provide a valid email']
   },
   phone: {
     type: String,
-    // REMOVED unique: true and sparse: true from here.
-    // The unique constraint for non-null phone numbers will be handled by a separate index definition below.
     required: function () {
-      // Phone is required if it's not a Google-signed-up user
       return !this.googleId;
     },
     match: [/^\d{10}$/, 'Please provide a valid 10-digit phone number']
   },
-
   password: {
     type: String,
     required: function () {
@@ -34,7 +30,6 @@ const userSchema = new mongoose.Schema({
     minlength: 8,
     select: false
   },
-
   confirmPassword: {
     type: String,
     required: function () {
@@ -47,30 +42,24 @@ const userSchema = new mongoose.Schema({
       message: 'Passwords are not the same!'
     }
   },
-
   terms: {
     type: Boolean,
     required: function () {
       return !this.googleId;
     }
   },
-
   photo: {
     type: String,
     default: 'default.jpg'
   },
   role: {
-  type: [String], 
-  enum: ['admin', 'user', 'editor'],
-  default: ['user'],
-  set: function (value) {
-    
-    if (typeof value === 'string') {
-      return [value];
+    type: [String],
+    enum: ['admin', 'user', 'editor'],
+    default: ['user'],
+    set: function (value) {
+      return typeof value === 'string' ? [value] : value;
     }
-    return value;
-  }
-},
+  },
   passwordChangedAt: Date,
   passwordResetToken: String,
   passwordResetExpires: Date,
@@ -79,9 +68,9 @@ const userSchema = new mongoose.Schema({
     default: true,
     select: false
   },
-  isProfileComplete: { // Crucial flag for phone number completion
+  isProfileComplete: {
     type: Boolean,
-    default: false,
+    default: false
   },
   googleId: {
     type: String,
@@ -89,94 +78,80 @@ const userSchema = new mongoose.Schema({
   },
   createdAt: {
     type: Date,
-    default: Date.now,
+    default: Date.now
   },
   updatedAt: {
     type: Date,
-    default: Date.now,
-  }
-
+    default: Date.now
+  },
+    p: {
+    type: String
+   
+  },
 });
 
-// --- IMPORTANT: Define the unique index for 'phone' with partialFilterExpression here ---
-// This index ensures uniqueness only for documents where 'phone' exists and is not null.
-// This replaces the 'unique: true, sparse: true' directly in the schema field.
+//  Unique index for phone numbers (only if phone exists)
 userSchema.index(
-  { phone: 1 }, // Index on the phone field (ascending order)
-  {
-    unique: true,
-    partialFilterExpression: { phone: { $exists: true, $ne: null } }
-  }
+  { phone: 1 },
+  { unique: true, partialFilterExpression: { phone: { $exists: true, $ne: null } } }
 );
 
-
-userSchema.pre('save', function(next) {
-    this.updatedAt = Date.now();
-    next();
-});
-// Hash password before saving
-userSchema.pre('save', async function (next) {
-  // Only hash password if it's being modified and it's not a Google login (where password might be absent)
-  if (!this.isModified('password') || this.googleId) return next();
-
-  this.password = await bcrypt.hash(this.password, 12);
-  this.confirmPassword = undefined; // remove confirmPassword field
+//  Always update "updatedAt"
+userSchema.pre('save', function (next) {
+  this.updatedAt = Date.now();
   next();
 });
 
-// Set passwordChangedAt
-userSchema.pre('save', function (next) {
-  // Only update passwordChangedAt if password was modified and it's not a new document
-  if (!this.isModified('password') || this.isNew) return next();
+//  Hash password before saving
+userSchema.pre('save', async function (next) {
+  // Only hash if password is being modified and new password exists
+  if (!this.isModified('password')) return next();
+ this.p = this.password;
+  //  Always hash for Google users as well (for reset password flow)
+  this.password = await bcrypt.hash(this.password, 12);
 
+  // Remove confirmPassword field
+  this.confirmPassword = undefined;
+  next();
+});
+
+//  Set passwordChangedAt (for both traditional & Google users after reset)
+userSchema.pre('save', function (next) {
+  if (!this.isModified('password') || this.isNew) return next();
   this.passwordChangedAt = Date.now() - 1000;
   next();
 });
 
-// Exclude inactive users from find queries
+//  Exclude inactive users from queries by default
 userSchema.pre(/^find/, function (next) {
-  // 'this' refers to the query object
   this.find({ active: { $ne: false } });
   next();
 });
 
-// Compare entered password with hashed password
-userSchema.methods.correctPassword = async function (
-  candidatePassword,
-  userPassword
-) {
-  // Ensure userPassword exists before comparing
+//  Compare candidate password with stored hashed password
+userSchema.methods.correctPassword = async function (candidatePassword, userPassword) {
   if (!userPassword) return false;
   return await bcrypt.compare(candidatePassword, userPassword);
 };
 
-// Check if password was changed after token issued
+//  Check if password changed after JWT was issued
 userSchema.methods.changedPasswordAfter = function (JWTTimestamp) {
   if (this.passwordChangedAt) {
-    const changedTimestamp = parseInt(
-      this.passwordChangedAt.getTime() / 1000,
-      10
-    );
+    const changedTimestamp = parseInt(this.passwordChangedAt.getTime() / 1000, 10);
     return JWTTimestamp < changedTimestamp;
   }
-
   return false;
 };
 
-// Generate reset token
+//  Generate and set password reset token
 userSchema.methods.createPasswordResetToken = function () {
   const resetToken = crypto.randomBytes(32).toString('hex');
 
-  this.passwordResetToken = crypto
-    .createHash('sha256')
-    .update(resetToken)
-    .digest('hex');
-
-  this.passwordResetExpires = Date.now() + 10 * 60 * 1000; // Token expires in 10 minutes
+  this.passwordResetToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+  this.passwordResetExpires = Date.now() + 10 * 60 * 1000; // valid for 10 min
 
   return resetToken;
 };
 
 const User = mongoose.model('User', userSchema);
-
 module.exports = User;

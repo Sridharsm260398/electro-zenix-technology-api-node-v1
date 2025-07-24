@@ -50,11 +50,11 @@ module.exports = class Email {
   }
 
   async sendWelcome() {
-    console.log(process.env.EMAIL_FROM)
+
     await this.send('welcome', 'Welcome to the Electro Zenix Family!');
   }
   async sendLogin() {
-    console.log(process.env.EMAIL_FROM)
+
     await this.send('login', 'Login Successfull to Electro Zenix!');
   }
   async sendPasswordReset() {
